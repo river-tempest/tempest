@@ -11,7 +11,7 @@ Note that the model is provided with ABSOLUTELY NO WARRANTY regarding its accura
 3. Load the CSV `Calibration.csv` as a data frame (read.csv or read_csv)
 4. Store the output of `make.model`, with the calibration dataset as the first argument, as a variable.
     (Note: this will be much faster if you also provide the named argument `nthreads` for multithreading.)
-5. Follow the steps in [Data Collection](#Data_Collection) to download data for your points.
+5. Follow the steps in [Data Collection](#Data-Collection) to download data for your points.
 6. Use the resulting CSV, read in as a data frame, as the second argument to `predict.temperature` (first argument being the model from (4)).
     The output will be a data frame of: id, ecoregion, year, time, start, end, temperature (temperature being the predicted stream temperature in Kelvin).
     You are done.
