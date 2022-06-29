@@ -7,7 +7,12 @@ Note that the model is provided with ABSOLUTELY NO WARRANTY regarding its accura
 # Quick Start
 
 1. Download the repository.
-2. Install (if necessary) the R libraries "dplyr", "tidyr", "quantregForest", and "purrr"
+2. Install (if necessary) the R libraries "dplyr", "tidyr", "quantregForest", and "purrr".  Versions tested:
+   * R: 4.1.2 on Windows 10 x64
+   * dplyr: 1.0.7 (via tidyverse)
+   * tidyr: 1.1.3 (via tidyverse)
+   * purrr: 0.3.4 (via tidyverse)
+   * quantregForest: 1.3 (dependency: randomForest at 4.7)
 3. Load the CSV `Calibration.csv` as a data frame (read.csv or read_csv)
 4. Store the output of `make.model`, with the calibration dataset as the first argument, as a variable.
     (Note: this will be much faster if you also provide the named argument `nthreads` for multithreading.)
