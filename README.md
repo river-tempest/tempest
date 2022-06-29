@@ -16,7 +16,7 @@ Note that the model is provided with ABSOLUTELY NO WARRANTY regarding its accura
 3. Load the CSV `Calibration.csv` as a data frame (read.csv or read_csv)
 4. Store the output of `make.model`, with the calibration dataset as the first argument, as a variable.
     (Note: this will be much faster if you also provide the named argument `nthreads` for multithreading.)
-5. Follow the steps in [Data Collection](#Data-Collection) to download data for your points.
+5. Follow the steps in [Data Collection](#Data-Collection) to download data for your points; you can go to the [code snapshot](https://code.earthengine.google.com/d0de7accd1e10300b8e38bf5295de610) with examples and documentation or load the whole repository as below.
 6. Use the resulting CSV, read in as a data frame, as the second argument to `predict.temperature` (first argument being the model from (4)).
     The output will be a data frame of: id, ecoregion, year, time, start, end, temperature (temperature being the predicted stream temperature in Kelvin).
     You are done.
@@ -30,7 +30,7 @@ The model can be trained and tested on any CSV dataset; in most cases, column na
 
 # Data Collection
 
-For the default setup, we provide a [Google Earth Engine script](https://code.earthengine.google.com/?accept_repo=users/dphilippus_mines/RST) (open `runner.js` and edit/run as appropriate) which will retrieve data in a suitable format for specified points and time intervals.  The GEE script is provided under the same terms, except that it builds on open-source code from Ermida et al. (2020), which should also be credited and cited in any research using it.  Full citation information for Ermida et al. is provided in the comments in runner.js.  Full instructions are included in the comments in `runner.js`.
+For the default setup, we provide a [Google Earth Engine script](https://code.earthengine.google.com/?accept_repo=users/dphilippus_mines/RST) (open `runner.js` and edit/run as appropriate) ([code snapshot](https://code.earthengine.google.com/d0de7accd1e10300b8e38bf5295de610)) which will retrieve data in a suitable format for specified points and time intervals.  The GEE script is provided under the same terms, except that it builds on open-source code from Ermida et al. (2020), which should also be credited and cited in any research using it.  Full citation information for Ermida et al. is provided in the comments in runner.js.  Full instructions are included in the comments in `runner.js`.
 
 # License
 
