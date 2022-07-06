@@ -1,0 +1,220 @@
+---
+title: "TempEst River Temperature Estimation Demo"
+author: "Daniel Philippus"
+date: "July 6, 2022"
+output: pdf_document
+
+---
+
+# Description
+
+This notebook is a demonstration of TempEst usage for river temperature
+estimation.
+
+TempEst is a river TEMPerature ESTimation model implemented in R; it supports
+high-accuracy estimation of river temperatures using only satellite-based remote
+sensing data.  A full description of usage and requirements is included in
+the [GitHub repository](https://github.com/river-tempest/tempest). The code is
+provided under the terms of the GNU General Public License v3.0 (see LICENSE in
+the repository), and any research derived from this code or data generated
+with it should cite
+Philippus, D., Sytsma, A., Rust, A., and Hogue, T.S. (manuscript in preparation).
+
+# Usage Summary
+
+The full process is detailed in Quick Start on the repository README.  Briefly,
+data inputs are retrieved via a provided Google Earth Engine script and loaded
+into R as a data table.  This data table can then be used with a trained model
+to predict monthly mean temperatures at selected points.  It can also predict
+quantiles, and has the option of preserving measured data for validation.
+
+A trained model is provided, but the model can also
+be trained to user-provided calibration data; `Calibration.csv` is an example.
+The regression output for model training, a `temperature` column, is not
+retrieved by the Earth Engine script; this should be processed (into monthly
+mean temperatures) from whatever measured data source the user wishes to train
+on.  In the provided data, training data were retrieved from United States
+Geological Survey stream temperature gages.
+
+# Dependencies
+
+The model has the following dependencies and was tested with the listed versions
+in R 4.1.2 on Windows 10 x64:
+
+* dplyr 1.0.7
+* tidyr 1.1.3
+* purrr 0.3.4
+* quantregForest 1.3
+* randomForest 4.7
+* This notebook, but not tempest, also requires ggplot2.
+
+In order to run this notebook, it must be located in a directory containing
+`tempest.R`, `Calibration.csv`, `Validation.csv`, and `Tempest.RData`.  The 
+easiest way to set this up is to clone the repository (or download and unzip
+the source archive from Releases), then download `Tempest.RData` from Releases
+into the same directory.  This demo was tested with Release v0.1.0.
+
+# Demo
+
+## Setup
+
+This chunk just loads dependencies and the required data.  To calibrate or
+validate with your own data, replace the file paths in `cal` and `val` below.
+
+The model was built and tested using data for the contiguous United States, but
+has no intrinsic limitations on using other geographic domains.  Simply using
+a different calibration dataset selected from the region of interest should
+then allow predictions for that region, although we suggest also generating
+and testing a validation dataset (see below) to make sure.
+
+```{r setup, echo=TRUE, results="hide", message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(quantregForest)
+library(ggplot2)
+source("tempest.R")
+
+cal <- read.csv("Calibration.csv")
+val <- read.csv("Validation.csv")
+load("Tempest.RData")  # creates variable tempest.model
+```
+
+## Model Training
+
+Since the above chunk loaded the pre-trained model, it is not necessary to train
+a new model.  However, an example is below in case you want to train one on your
+own data or just see how it works.  You do not need to run this chunk if not.
+
+We suggest increasing the number in the `nthreads=1` argument to use multithreaded
+processing and train the model much faster.  On the developer's machine, the model
+training takes several minutes with `nthreads=1`.
+
+```{r training, echo=TRUE, results="hide", message=FALSE}
+model <- make.model(cal, nthreads=1)
+```
+
+## Model Usage
+
+Here, we demonstrate several ways to use the model.
+
+### Basic Prediction
+
+This section demonstrates simply predicting stream temperatures.  For convenience,
+we use the validation dataset as inputs; however, any dataset is suitable.  To run
+this with the newly trained model from above, replace `tempest.model` with `model`.
+In addition to printing the table, the output data is stored as `data`.
+
+In this example, it does not matter whether the input table (`val`) has a
+`temperature` column (used for validation) or not.  If it is present, it will
+be overwritten in the output.
+
+```{r prediction}
+data <- predict.temperature(tempest.model, val)
+head(data) %>% as_tibble
+```
+
+### Spatial Plotting
+
+TempEst provides a simple visualization function to plot the spatial distribution
+of average stream temperatures, faceted by month.  This plotting function requires
+`lat` and `lon` (decimal latitude and longitude) columns, which are not included
+in the default output from above, so we need to run `predict.temperature` with
+different arguments.  Specifically, setting `preserve=TRUE` will include all
+columns from the input data.
+
+With our validation dataset, though, we do not want to preserve the validation
+`temperature` column, so that needs to be removed first.  If you are using
+a dataset that does not have a `temperature` column, delete or comment out
+the end of line 1, `%>% select(-temperature)`.
+
+The validation dataset used is distributed across the contiguous United States.
+Note that there is a clear gradient in typical temperatures across the country,
+with east and south generally being warmer than north and west.  The predicted
+monthly mean temperatures at some gages range from less than 280 K (7 degC) in
+the northern Midwest and Mountain West winter to over 300 K (27 degC) in the
+summer near the Gulf of Mexico.
+
+With a dataset of, for example, many points along a single stream or within
+a single watershed, the same function used in the same way could display the
+spatial trends in temperatures within the area of interest.  For focused usage,
+we suggest adding to the ggplot output of `plot.temperature` a path geometry
+showing key features and boundaries.  This could then be used, for example, to
+visualize temperature differences between the north and south faces of a watershed.
+
+```{r spatial_plot, message=FALSE}
+p.data <- val %>% select(-temperature)
+predict.temperature(
+  tempest.model,
+  p.data,
+  preserve=TRUE
+) %>%
+  plot.temperature
+```
+
+### Quantile Prediction
+
+The TempEst prediction function also accepts the argument `what`, which specifies
+quantiles to predict.  In this example, we use `what` to predict the 2.5th, 10th, 25th,
+50th, 75th, 90th, and 97.5th percentile temperatures in the Northwestern Forested Mountains
+ecoregion and then plot the means of each quantile throughout the year.  This
+ecoregion corresponds to the Rocky Mountains, the Cascades, and the Sierra Nevada.
+In the validation dataset, there are 38 points in this region.
+
+Note that these are the mean of the X percentile, not the X percentile of the mean.
+These quantiles, as they are for individual predictions, do not account for the
+scaling of the standard deviation of the mean with the number of inputs.
+
+These data do show, quite confidently, that December is the month with the lowest
+average stream temperatures, while the warmest month may be either July or August.
+July has higher high-quantile temperatures, while August has higher low-quantile
+temperatures; based on the median prediction, July is very slightly warmer.
+
+```{r quantiles, message=FALSE}
+q.data <- filter(val,
+                 ecoregion == "NORTHWESTERN FORESTED MOUNTAINS")
+predict.temperature(tempest.model,
+                             q.data,
+                             what=c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)) %>%
+  pivot_longer(
+    starts_with("temperature_"),  # temperature_0.1, etc
+    names_to = "Quantile",
+    values_to = "Temperature",
+    names_pattern = "temperature_([0-9.]+)"  # regex to extract quantile
+  ) %>%
+  group_by(time, Quantile) %>%
+  summarize(
+    Temperature = mean(Temperature)
+  ) %>%
+  ggplot() +
+  aes(x=time, y=Temperature, color=Quantile) +
+  geom_line(size=2) +
+  theme_bw() +
+  labs(
+    x="Month",
+    y="Regional Mean Temperature",
+    color="Quantile",
+    title="TempEst Quantile Predictions for the Northwestern Forested Mountains"
+  )
+```
+
+### Validation
+
+Finally, the TempEst model has built-in support for validation using the
+`compare=TRUE` argument.  This argument preserves a measured `temperature`
+column in the original dataset, renaming it `Actual`, in addition to predicting
+`Modeled` temperature, to allow for direct comparison.  Here we again use the
+default validation dataset, but you can also provide your own above.  TempEst
+also has a built-in validation error display function.  The display function
+shows the distribution of individual gage performance metrics by ecoregion.
+
+With this validation dataset, the median percent bias is always approximately
+zero, median coefficient of determination is always greater than 0.88, and median
+root mean square error is always less than 3 K.
+
+```{r validation, message=FALSE}
+predict.temperature(tempest.model, val, compare=TRUE) %>%
+  error.bxp
+```
+
+
