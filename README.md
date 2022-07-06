@@ -26,7 +26,10 @@ Note that the model is provided with ABSOLUTELY NO WARRANTY regarding its accura
    * The output is a data frame of: id, ecoregion, year, time, start, end, temperature (predicted temperature in Kelvin).
 7. (Optional) Check model accuracy.  Read in a validation dataset (`Validation.csv` or your own) as a data frame; this should contain all the usual input columns plus a `temperature` (known temperature in Kelvin) column.  Use this dataset as the second argument to `predict.temperature` with the named argument `compare=T`. The output will have columns `Actual` and `Modeled` in place of `temperature`, which you can use for error analysis.  Given this output as its argument, the provided function `error.bxp()` (additional dependency: `ggplot2`) generates boxplots, grouped by ecoregion, of each gage's Root Mean Square Error (RMSE), Percent Bias, and Coefficient of Determination (R2).
 8. (Optional) Predict temperature quantiles.  `predict.temperature` also takes the named argument `what`, e.g. `what=c(0.05, 0.5, 0.95)`, which will predict quantiles instead of just the median.  The output columns will be named `<basename>_<quantile>`, e.g. `temperature_0.05` or (if `compare=T` is also specified) `Modeled_0.05`.
-9. (Optional) Data visualization.  The function `plot.temperature` (additional dependency: `ggplot2`), with the output from (6) as its argument (assuming that `compare` was set to false and the column is called `temperature`, not `Modeled`), plots the prediction points on a grid (decimal latitude/longitude) colored by their overall average temperature.
+9. (Optional) Data visualization.  The function `plot.temperature` (additional dependency: `ggplot2`) plots the prediction points on a grid (decimal latitude/longitude) colored by their overall average temperature.  The argument to `plot.temperature`, in order to have the columns `lat`, `lon`, and `temperature`, must be the result of running `predict.temperature` with:
+   * Argument `preserve=TRUE`
+   * Argument `compare=FALSE` (default)
+   * AND the data (second) argument must not have a `temperature` column.
 
 # Usage
 

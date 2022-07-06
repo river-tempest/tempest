@@ -148,6 +148,60 @@ urban <- function(td, threshold=0.1, isolate=F, nurb=F) {
   }
 }
 
+error.bxp <- function(data) {
+  # This function displays boxplots of error distributions by ecoregion
+  # and gage.
+  library(ggplot2)
+  
+  data %>%
+    drop_na() %>%
+    group_by(id, ecoregion) %>%
+    summarize(
+      `RMSE (K)` = sqrt(mean((Modeled - Actual)^2)),
+      `Percent Bias` = 100 * sum(Modeled - Actual)/sum(Actual),
+      `R2` = cor(Modeled, Actual)^2
+    ) %>%
+    pivot_longer(
+      c("RMSE (K)", "Percent Bias", "R2"),
+      names_to="GOF",
+      values_to="Value"
+    ) %>%
+    ggplot() +
+    aes(x=ecoregion, y=Value) +
+    geom_boxplot() +
+    facet_wrap(~GOF, strip.position="left", scales="free_y",
+               nrow=1) +
+    labs(
+      x="Ecoregion",
+      y=NULL,
+      title="TempEst Validation Gage Error Distributions by Ecoregion"
+    ) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle=60, vjust=1, hjust=1))
+}
+
+plot.temperature <- function(data) {
+  # This function plots a spatial distribution of average point temperatures.
+  # The data input must be run with `preserve=TRUE` so that lat/lon are present.
+  data %>%
+    drop_na() %>%
+    group_by(id, lat, lon, time) %>%
+    summarize(
+      temperature = mean(temperature)
+    ) %>%
+    ggplot() +
+    aes(x=lon, y=lat, color=temperature) +
+    geom_point(size=2) +
+    facet_wrap(~time, nrow=3) +
+    theme_bw() +
+    labs(
+      x="Longitude",
+      y="Latitude",
+      color="Mean Monthly Temperature (K)",
+      title="Spatial Distribution of TempEst Stream Temperatures"
+    )
+}
+
 case.study <- function() {
   # This is the source code of the case study from the paper.
   # (Philippus, Sytsma and Hogue, not yet submitted.)
