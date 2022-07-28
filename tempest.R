@@ -42,6 +42,7 @@ make.model <- function(td, ntree=2000, ...) {
   # this should be monthly.  If needed, you could also use e.g. annual or
   # seasonal models simply by changing what "time" stores, but you should
   # investigate the accuracy if so.
+  td$time <- as.character(td$time)
   regl <- {}
   months <- unique(td$time)
   td <- drop_na(td) %>% urban
@@ -81,6 +82,8 @@ predict.temperature <- function(mod, data, compare=F, preserve=F, what=NULL) {
   # columns required above will be preserved.
   #
   # NOTE: rows with NAs will be dropped.
+  data$time <- as.character(data$time)
+  
   data <- drop_na(data) %>% urban
   wlabel <- !is.null(what)
   what <- if (!wlabel) 0.5 else what
