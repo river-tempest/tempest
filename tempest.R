@@ -9,7 +9,7 @@
 # in progress, will update date and DOI when published.)  If you use this
 # script for research, please cite that paper.
 #
-# Copyright (c) 2022 Daniel Philippus.  This code is open-source and provided
+# Copyright (c) 2023 Daniel Philippus.  This code is open-source and provided
 # with ABSOLUTELY NO WARRANTY.  You are free to use, modify, and redistribute it
 # under certain conditions, namely that any modifications are provided under
 # the same or compatible terms.  This code is provided under the GNU General
@@ -45,7 +45,9 @@ make.model <- function(td, ntree=2000, ...) {
   td$time <- as.character(td$time)
   regl <- {}
   months <- unique(td$time)
-  td <- drop_na(td) %>% urban
+  # Remove columns that are only NA (support for omitting predictors),
+  # then drop rows that have NAs.
+  td <- drop.all.na(td) %>% drop_na %>% urban
   for (month in months) {
     dat <- filter(td, time == month) %>%
       select(-start, -end, -id,
@@ -84,7 +86,7 @@ predict.temperature <- function(mod, data, compare=F, preserve=F, what=NULL) {
   # NOTE: rows with NAs will be dropped.
   data$time <- as.character(data$time)
   
-  data <- drop_na(data) %>% urban
+  data <- drop.all.na(data) %>% drop_na %>% urban
   wlabel <- !is.null(what)
   what <- if (!wlabel) 0.5 else what
   has.tmp <- "temperature" %in% names(data)
@@ -139,16 +141,27 @@ urban <- function(td, threshold=0.1, isolate=F, nurb=F) {
   # Default threshold: 0.1
   urb <- td$builtup >= threshold
   td$urban <- urb
-  cat("Num. urban gages: ", length(unique(td$id[urb])))
+  # cat("Num. urban gages: ", length(unique(td$id[urb])))
   if (isolate) {
     if (!nurb)
       td[urb,]
     else
       td[!urb,]
   } else {
-    cat("\nNum. non-urban gages: ", length(unique(td$id[!urb])))
+    # cat("\nNum. non-urban gages: ", length(unique(td$id[!urb])))
     td
   }
+}
+
+all.na <- function(x) {
+  # Utility function: determine if a vector is entirely NA
+  sum(!is.na(x)) == 0
+}
+
+drop.all.na <- function(data) {
+  # Utility function: drop columns that are all NA
+  select(data,
+         where(~!all.na(.)))
 }
 
 error.bxp <- function(data) {
