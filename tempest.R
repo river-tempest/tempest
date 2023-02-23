@@ -21,7 +21,7 @@ library(tidyr)
 library(quantregForest)
 library(purrr)
 
-make.model <- function(td, ntree=2000, ...) {
+make.model <- function(td, default.inputs=TRUE, ntree=2000, ...) {
   # This function trains a temperature model on the provided dataset td.
   # In addition to a number of predictors for which the name is irrelevant
   # so long as it is consistent (see paper for specifics), the input should
@@ -31,6 +31,15 @@ make.model <- function(td, ntree=2000, ...) {
   # The dataset td should be a data frame.  Other than the above-specified
   # columns, predictor columns can have arbitrary names and can be a mix
   # of numerical and categorical inputs.
+  #
+  # If default.inputs = TRUE, the input data frame will be filtered to the columns
+  # below and must have those columns.  Otherwise it only needs the first 6 and
+  # will train on anything.  If default.inputs=TRUE, then all named columns
+  # must also be present in prediction data (except temperature).
+  # start, end, id, time, year, temperature,
+  # avgtemp, landtemp, humidity,
+  # lat, lon, elevation,
+  # water, builtup, trees
   # 
   # The arguments ntree and ... are passed on directly
   # to quantregForest.
@@ -47,7 +56,16 @@ make.model <- function(td, ntree=2000, ...) {
   months <- unique(td$time)
   # Remove columns that are only NA (support for omitting predictors),
   # then drop rows that have NAs.
-  td <- drop.all.na(td) %>% drop_na %>% urban
+  td <- if (!default.inputs) {
+    td
+  } else {
+    select(td,
+           start, end, id, time, year, temperature,
+           avgtemp, landtemp, humidity,
+           lat, lon, elevation,
+           water, builtup, trees)
+  }
+  td <- drop.all.na(td) %>% drop_na
   for (month in months) {
     dat <- filter(td, time == month) %>%
       select(-start, -end, -id,
@@ -86,7 +104,7 @@ predict.temperature <- function(mod, data, compare=F, preserve=F, what=NULL) {
   # NOTE: rows with NAs will be dropped.
   data$time <- as.character(data$time)
   
-  data <- drop.all.na(data) %>% drop_na %>% urban
+  data <- drop.all.na(data) %>% drop_na
   wlabel <- !is.null(what)
   what <- if (!wlabel) 0.5 else what
   has.tmp <- "temperature" %in% names(data)
