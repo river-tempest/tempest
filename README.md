@@ -4,6 +4,10 @@ Tempest is a river TEMPerature ESTimation model implemented in R; it supports hi
 
 Note that the model is provided with ABSOLUTELY NO WARRANTY regarding its accuracy or anything else.  The above performance information is typical behavior, not a guarantee.
 
+# TempEst v2.0
+
+TempEst 2.0 will significantly enhance TempEst functionality.  This is strictly a work in progress and should not be relied upon until otherwise indicated.
+
 # Quick Start
 
 1. Download the repository (clone or download the archive from Releases).
