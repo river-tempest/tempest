@@ -1,0 +1,1042 @@
+---
+title: "Detailed TempEst Validation"
+author: "Daniel Philippus"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: pdf_document
+---
+
+This R Notebook walks through a set of validations for the TempEst remote sensing-
+based river temperature model (Philippus, Sytsma, Rust, and Hogue, in review).
+The idea is that simply running the notebook (with required data present) will produce
+the full suite of validation data; this both makes the study results straightforwardly
+reproducible and assists in testing modifications to TempEst.
+
+It uses the TempEst model and training/testing data from the [GitHub Repository](https://github.com/river-tempest/tempest),
+which is assumed to be present in the working directory as `tempest/tempest.R`.
+
+This Notebook is assumed to be run in the same directory as `tempest.R` and
+`Data.csv` with a `Data` subdirectory.  Dependencies are `tidyverse` and `hydroGOF`.
+
+Typical runtime is several hours, as the model is trained hundreds of times for
+various cross-validations (and training takes much longer than prediction).  Memory
+use typically reaches a few gigabytes.  A significant fraction of the runtime is
+the yearwise cross-validation, and the results there are somewhat superfluous
+in the context of the before/after 2000 validation, so skipping that would be
+a good way to reduce runtime.  The density testing also takes quite some time,
+and is not important if your use case uses the USGS gage network or a network
+of similar density.  The dataset here (~1,000 USGS gages/10x10^6 km2) is about
+1 gage per 10,000 km2.
+
+```{r setup}
+knitr::opts_chunk$set(message=FALSE, warning=FALSE)
+
+library(tidyverse)
+library(hydroGOF)
+source("tempest.R")
+
+theme_std <- function(size=14,...) {
+  theme_bw(size) +
+    theme(
+      strip.placement = "outside",
+      strip.background = element_rect(
+        fill="white",
+        color="white"
+      ),
+      ...
+    )
+}
+theme_vert <- function(size=14,...) {
+  theme_std(
+    size=size,
+    axis.text.x = element_text(
+      angle=90, vjust=0.5, hjust=1
+    ),
+    ...
+  )
+}
+twrap <- scale_x_discrete(labels = function(x)
+  str_wrap(str_to_title(x), width=15))
+
+performance <- function(pred) pred %>%
+  group_by(id) %>%
+  summarize(
+      `RMSE (C)` = rmse(Modeled, Actual),
+      `Percent Bias` = pbias(Modeled, Actual),
+      R2 = cor(Modeled, Actual)^2,
+      NSE = NSE(Modeled, Actual)
+  )
+
+performance <- function(pred) pred %>%
+  group_by(id) %>%
+  summarize(
+      `RMSE (C)` = rmse(Modeled, Actual),
+      `Percent Bias` = pbias(Modeled, Actual),
+      R2 = cor(Modeled, Actual)^2,
+      NSE = NSE(Modeled, Actual)
+  )
+
+perf.bymonth <- function(pred) pred %>%
+  group_by(id, time) %>%
+  summarize(
+      `RMSE (C)` = rmse(Modeled, Actual),
+      `Percent Bias` = pbias(Modeled, Actual),
+      R2 = cor(Modeled, Actual)^2,
+      NSE = NSE(Modeled, Actual)
+  )
+```
+
+# Utility Code: Cross-Validation
+
+The `caret` package provides excellent cross-validation utilities, but provides
+summary statistics for the entire run.  In order to compute gage-wise statistics,
+this is a quick roll-your-own k-fold cross-validation utility.  This assumes
+that cross-validation groups are broken out by a `CV` column, which can contain
+arbitrary data.
+
+```{r}
+kfold <- function(data, k=5,
+                  proc=performance,
+                  ...) {
+  cv <- unique(data$CV)
+  groups <- tibble(CV = cv,
+                   CV.Index = sample(1:k, length(cv), replace = TRUE))
+  data <- left_join(data, groups, by="CV")
+  map_dfr(1:k,
+          function(cvi) {
+            train <- filter(data, CV.Index == cvi)
+            test <- filter(data, CV.Index != cvi)
+            proc(
+              predict.temperature(
+                make.model(train,
+                           nthreads=12),
+                test,
+                compare=T,
+                ...
+              )
+            )
+          })
+}
+```
+
+
+# Data Preparation
+
+The default TempEst setup simply has a calibration and a validation dataset stored
+separately.  To use different approaches to validation, this section just merges
+those two and stores the merged dataset.  The dataset gage locations are also
+plotted on a map of CONUS.
+
+Instead of loading the default dataset, you can also generate a new dataset using
+Earth Engine point outputs (without observed temperatures) associated with USGS
+gage IDs and automatically retrieving observed temperatures using `dataRetrieval`.
+This approach assumes that
+there is a `Raw` directory, containing only Earth Engine output CSVs,
+and a `ByID` directory, where intermediate processing CSVs will be written.
+There must
+also be a `tempest/getUSGS.R` script for USGS data retrieval.
+
+To retrieve observed data from the USGS, set `retrieve.usgs <- TRUE`.
+
+```{r loaddata}
+retrieve.usgs <- TRUE
+
+data <- (if (file.exists("Data.csv")) {
+  read_csv("Data.csv", show_col_types = FALSE)
+} else {
+  data <- if (retrieve.usgs) {
+    source("tempest/getUSGS.R")
+    raw <- if (file.exists("Raw.csv")) {
+      read_csv("Raw.csv")
+    } else {
+      map_dfr(
+        list.files("Raw/", full.names = T),
+        read_csv
+      )
+    }
+    if (!file.exists("Raw.csv")) {
+      write_csv(raw, "Raw.csv")
+    }
+    # Process incrementally to keep the memory use under control
+    raw %>%
+      # Use this (below) to resume at some point if it hangs; sometimes
+      # the data retrieval randomly hangs (presumably due to some network issue.)
+      filter(id > "14148000") %>%
+      group_by(id) %>%
+      group_walk(
+        ~write_csv(add.temp(mutate(
+          .x, id=.y$id
+        )),
+        paste0("ByID/", .y$id, ".csv")
+      ))
+    rm(raw)
+    # Then load everything in
+    map_dfr(
+      list.files("ByID/", full.names = T),
+      ~read_csv(., col_types=list(id=col_character()))
+    ) %>%
+      filter(temperature > -5,
+             temperature < 100,
+             avgtemp < 373)
+      # allow for some slightly subzero temps but remove obvious errors
+      # also removes NAs (missing observations)
+      # presumably no valid land or water temperatures are over 100 C
+      # A total of ~600k rows (1300 gages x 39 years x 12 months) are retrieved.
+      # After filtering, 120k remain, with 1009 gages.
+  } else {
+    rbind(
+      read_csv("tempest/Calibration.csv"),
+      read_csv("tempest/Validation.csv")
+    )
+  }
+  write_csv(data, "Data.csv")
+  data
+}) %>%
+  drop.all.na %>%
+  drop_na
+
+data %>% select(id, year) %>% summarize(across(everything(), ~length(unique(.))))
+
+data %>%
+  group_by(year) %>%
+  summarize(N = length(unique(id))) %>%
+  ggplot() +
+  aes(x=year, y=N) +
+  geom_line(size=2) +
+  theme_std(12) +
+  labs(
+    x="Year",
+    y="Number of Points With Data"
+  )
+```
+
+
+The map of gages shows that the coordinate extremes of CONUS (i.e. Maine,
+Florida, Southern California, and Washington) are covered with a wide range
+of coverage across the interior of the country.  There are also at least some
+gages in most large areas of other extremes, such as the arid Southwest, the
+high Rocky Mountains, the small slice of Tropical Wet Forest in Florida, and so
+on.  However, coverage does follow the distribution of USGS gages and therefore
+areas with few gages are sparsely covered.  The main area of concern for coverage
+is the arid Southwest; South Dakota also appears to have no or perhaps one gage,
+but its behaviors are presumably well-captured by the coverage in surrounding states.
+
+```{r plotgages}
+states <- map_data("state")
+
+data %>%
+  group_by(id) %>%
+  slice_head(n=1) %>% # first row of each gage only, don't need timeseries
+  ggplot() +
+  geom_polygon(aes(long, lat, group=group), data=states, fill="white",
+                 color="grey", size=2) +
+  aes(x=lon, y=lat) +
+  geom_point(size=2) +
+  theme_bw() +
+  labs(
+    x="Longitude",
+    y="Latitude"
+  )
+```
+
+# Global Validation Performance
+
+This section identifies overall model performance.  Gagewise performance statistics
+are extracted from a 5-fold cross-validation.  In order to reduce uncertainty
+in the cross-validation results, this is run 10 times and the full results are
+reported.  The performance dataset is a total of 50 (5-fold x 10 runs)
+distinct, though overlapping, validation samples.
+
+Global summary statistics for all performance metrics are reported.  Performance
+statistics by gage are plotted by ecoregion.  Trends in performance
+statistics by variable of interest are also plotted.  A few outliers make the
+box plot scales unintelligible, so for plotting only the data are filtered for
+NSE > -1, RMSE < 10 C, and bias < 200%, but the unfiltered data are represented
+in the summary statistics.
+
+Running this also gives the user an idea of TempEst runtime.  The cross-validation
+computation, using the default dataset, involves training and predicting with
+the model 50 times on about 96,000 and 24,000 observations at 800 and 200 locations,
+respectively.  On the developer's desktop this tends to take about twenty minutes;
+training takes much longer than predicting.
+
+```{r perfdata}
+global.cvp <- map_dfr(1:10,
+        function(ix) {
+          print(paste("Running", ix))
+          kfold(
+            mutate(data, CV=id)
+          )
+          })
+identifiers <- data %>%
+  group_by(id, time) %>%
+  summarize(
+    ecoregion = first(ecoregion),
+    elevation = first(elevation),
+    temperature = mean(temperature, na.rm=T),
+    humidity = mean(humidity, na.rm=T),
+    water = mean(water, na.rm=T),
+    builtup = mean(builtup, na.rm=T)
+  )
+gcv.wid <- left_join(
+  identifiers,
+  global.cvp,
+  by="id"
+)
+summary(gcv.wid)
+```
+```{r gloperf}
+gcv.wid %>%
+  filter(
+    `RMSE (C)` <= 10,
+    NSE >= -1,
+    `Percent Bias` <= 200
+  ) %>%
+  pivot_longer(`RMSE (C)`:NSE,
+               names_to="GOF",
+               values_to="Value") %>%
+  ggplot() +
+  aes(x=ecoregion,
+      y=Value) +
+  geom_boxplot() +
+  facet_wrap(~GOF,
+             ncol=2,
+             strip.position = "left",
+             scales="free_y") +
+  labs(
+    x="Ecoregion",
+    y=NULL
+  ) +
+  theme_vert() +
+  twrap
+```
+
+Alternative global performance plots (wide, so good for posters/slides):
+
+```{r}
+pltcv <- gcv.wid %>%
+  filter(
+    `RMSE (C)` <= 10,
+    `Percent Bias` <= 100
+  )
+print(nrow(pltcv) / nrow(gcv.wid))
+```
+```{r}
+pltcv %>%
+  pivot_longer(c(`RMSE (C)`, `R2`, `Percent Bias`),
+               names_to="GOF",
+               values_to="Value") %>%
+  ggplot() +
+  aes(x=ecoregion, y=Value) +
+  geom_boxplot() +
+  facet_wrap(~GOF,
+             nrow=1,
+             strip.position = "bottom",
+             scales="free_y") +
+  labs(
+    x="Ecoregion",
+    y=NULL
+  ) +
+  twrap +
+  theme_vert()
+```
+
+
+
+```{r varcors}
+gcv.wid %>%
+  ungroup() %>%
+  summarize(
+    across(
+      elevation:builtup,
+      ~cor(.x, `RMSE (C)`,
+           method="spearman", use="complete.obs")  # possible nonlinear correlations
+    )
+  )
+
+gcv.wid %>%
+  rename(
+    `elevation (m)` = elevation,
+    `humidity (kg/kg)` = humidity,
+    `temperature (C)` = temperature
+  ) %>%
+  pivot_longer(
+    `elevation (m)`:builtup,
+    names_to="Variable",
+    values_to="Value"
+  ) %>%
+  ggplot() +
+  aes(
+    x=Value,
+    y=`RMSE (C)`
+  ) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  facet_wrap(~Variable, nrow=2,
+             strip.position = "bottom",
+             scales="free_x") +
+  labs(
+    x=NULL,
+    y="Gage RMSE (C)"
+  ) +
+  theme_std()
+```
+
+# Quantile Regression Performance
+This section tests the quantile regression capabilities: what proportion of observations
+are within the predicted 95% and 50% confidence intervals, for each gage and globally.
+
+The predicted confidence intervals tend to be conservative.  Globally, 56% and
+96% of observations are within the predicted 50% and 95% confidence intervals,
+respectively; across gages, the median in-interval fractions are higher than
+the means, at 59% and 99%.  Even the first quartile for in-95% is 96%, so for
+more than 75% of gages, 95% or more of observations will actually be in the 95%
+confidence interval.  The mean (across gages) mean (across timesteps) width of
+the 95% and 50% confidence intervals are 11 and 3.5 C, respectively.  Interestingly,
+in light of an RMSE of 1.7-1.8 C, this means that theoretically 50% (actually
+about 55-60%) of predictions are within $\pm$ RMSE of the observed value.
+
+```{r}
+proc <- function(preds) {
+  # Predictions -> columns Actual, Modeled_0.025, Modeled_0.25, Modeled_0.75,
+  # Modeled_0.975
+  preds %>%
+    drop_na() %>%
+    mutate(
+      In50 = Actual >= Modeled_0.25 & Actual <= Modeled_0.75,
+      In95 = Actual >= Modeled_0.025 & Actual <= Modeled_0.975,
+      Width50 = Modeled_0.75 - Modeled_0.25,
+      Width95 = Modeled_0.975 - Modeled_0.025
+    ) %>%
+    group_by(id) %>%
+    summarize(
+      N50 = sum(In50),  # Ns/Nos allow computation of global CI accuracy
+      No50 = sum(!In50),
+      N95 = sum(In95),
+      No95 = sum(!In95),
+      In50 = mean(In50),
+      In95 = mean(In95),
+      Width50 = mean(Width50),
+      Width95 = mean(Width95)
+    )
+}
+global.cvci <- map_dfr(1:10,
+        function(ix) {
+          print(paste("Running", ix))
+          kfold(
+            mutate(data, CV=id),
+            proc = proc,
+            what=c(0.025, 0.25, 0.75, 0.975)
+          )
+          })
+summary(select(global.cvci, In50, In95, Width50, Width95))
+```
+```{r}
+signif(
+  c(
+    "Global 50%" = sum(global.cvci$N50) / sum(global.cvci$N50 + global.cvci$No50),
+    "Global 95%" = sum(global.cvci$N95) / sum(global.cvci$N95 + global.cvci$No95)
+  ),
+  2
+)
+global.cvci %>%
+  select(id, `In 50% Confidence Interval`=In50,
+         `In 95% Confidence Interval`=In95) %>%
+  pivot_longer(
+    -id,
+    names_to="CI",
+    values_to="In"
+  ) %>%
+  ggplot() +
+  aes(x=In) +
+  geom_histogram() +
+  facet_wrap(~CI, ncol=2, scales="free_x", strip.position = "bottom") +
+  labs(
+    x=NULL,
+    y="Frequency"
+  ) +
+  theme_std()
+```
+
+
+
+# Coverage Range
+
+Here, I simply plot the range of some key variables covered by the dataset.  One
+faceted plot is generated for a list of variables, so the user can easily add
+or remove variables if they are so inclined.  I selected observed temperature,
+elevation, land surface temperature, humidity, and water abundance.  Note that this
+is a plot of *observations*, not *gages*.  Also, a log scale is used on the Y-axis
+so that differences among rarer points are clear when more common values can have
+thousands of observations.
+
+Water abundance
+can be used as a rough proxy for river width ("effective river width" in the paper),
+which will tend to overestimate it.  For a perfectly straight, uniform river with no
+additional water in the 1000-m data collection radius, river length is 1000 m
+and river surface area $A=water\cdot\pi 1000^2$, so river width is $W=water\cdot\pi 1000$ m.
+Thus, the minimum width range for raw Landsat accuracy (60-180 m) corresponds to
+a water abundance of (at most) 0.02-0.06, and a width of a single land cover pixel,
+10 m, is about 0.003 abundance.
+
+These key variables have quite wide coverage in general, with both water and
+land surface temperature ranging up to a (perhaps questionable) 60 C, elevation
+ranging as high as 3,000 m (which does exclude some high mountain streams, but
+not many), and water abundance weighted towards smaller rivers, including many
+with abundance < 0.03 (roughly one Landsat pixel), while some rivers cover
+the large majority of the data collection radius (width > 1 km).  Using
+`quantile(data$water)`, about 20% of the observations have 0 water abundance,
+meaning the river did not appear at all on the 10-m resolution land cover dataset
+and is therefore consistently narrower than 10 m for the entire 2000 m (or more,
+depending on sinuosity) length covered in the data collection radius.
+
+Thus, the only major concern for coverage is the sparsity of data in the arid
+Southwest.
+
+```{r coverplot}
+data %>%
+  mutate(avgtemp = avgtemp - 273) %>%  # K to C
+  select(
+    `Observed Temperature (C)` = temperature,
+    `Elevation (m)` = elevation,
+    `Land Surface Temperature (C)` = avgtemp,
+    `Specific Humidity (kg/kg)` = humidity,
+    `Water Abundance` = water
+  ) %>%
+  pivot_longer(everything(),
+               names_to="Variable",
+               values_to="Value") %>%
+  ggplot() +
+  aes(x=Value) +
+  geom_histogram() +
+  scale_y_log10() +
+  facet_wrap(~Variable, strip.position = "bottom", scales="free") +
+  theme_std() +
+  labs(
+    x=NULL,
+    y="Frequency (log scale)"
+  )
+```
+
+
+# Arid Southwest Performance
+
+To test the effect of sparsity on performance in the arid Southwest, I separate
+gages with a latitude less than 38 degrees N and a longitude between -115 and -100
+degrees E, mainly covering Arizona, New Mexico, and part of Texas.  This region
+was selected based on visual inspection of the map above to cover part of the
+arid Southwest which is sparsely-gaged but still actually does have gages to test
+on.  The gages in this region are withheld from the training dataset and used for
+validation.  Note that the training dataset does contain some other gages in the
+arid Southwest, such as in Nevada, but not many and none in quite a large region.
+
+For a comparison point, in the original cal/val approach, the North American Deserts
+ecoregion had a median validation RMSE of about 1.9 C.
+
+The median RMSE is a bit worse, at about 2.5 C, but still reasonable.  Most gages
+have a respectable $R^2$ of over 0.9, and bias is generally between $\pm$ 10%,
+with a median of -4%.  Median gagewise NSE is about 0.88, though the mean is pulled
+down to around 0 by a few large negative outliers.
+
+Thus, the spatial distribution appears to be a moderate problem but
+not catastrophic.
+
+```{r southwest.mod}
+# Calibration: 34k obs, 1142 gages
+cal <- filter(data,
+              lat > 38 | lon < -115 | lon > -100)
+# Validation: 1k obs, 25 gages
+val <- filter(data,
+              lat < 38,
+              lon > -115,
+              lon < -100)
+
+model <- make.model(
+  cal,
+  nthreads=12
+)
+pred <- predict.temperature(
+  model,
+  val,
+  compare=T
+)
+rm(cal, val, model)  # memory efficiency
+```
+
+```{r southwest.perf}
+perf <- performance(pred)
+summary(select(perf, -id))
+
+perf %>%
+  pivot_longer(-id, names_to="GOF", values_to="Value") %>%
+  ggplot() +
+  aes(y=Value) +
+  geom_boxplot() +
+  facet_wrap(~GOF, nrow=1, strip.position = "left",
+             scales="free") +
+  theme_std() +
+  labs(
+    y=NULL
+  )
+```
+
+# Elevation Performance
+
+Another possible concern is high-altitude streams.  Therefore, with a similar
+approach to arid Southwest, I train the model excluding streams above 1800 m,
+which is roughly the 95th percentile, and test its performance on the remaining
+group.
+
+Here, the performance is considerably worse (median RMSE = 3 C), 
+and there is a strong tendency towards positive bias (median 17%), suggesting
+that the model in its current arrangement should be used with caution for streams exceeding
+about 3000 m in elevation.  Fortunately, such streams in CONUS, being high in the
+mountains, are generally small, low-order, and quite cold, as well as being above
+most development (the highest city in North America, Leadville, CO, is at about 3000 m).
+
+It is also difficult to distinguish in performance impact whether this is caused
+by altitude as such or just by the sparse gage network at altitude, with just ~50
+gages above 1800 m, fewer than 200 above 1 km, and less than a quarter of the
+gage network above 500 m.  Altitudes above 500 m (and 1 km) cover a large fraction
+of CONUS (e.g., most of the Mountain West and a sizable fraction of the Great Plains,
+Appalachian Mountains, etc), so the "not low-altitude" portion of the network is
+much sparser than the overall network.
+
+Interestingly, high altitude performance improved considerably with more limited
+variable selection.  In the original model, median RMSE was 4.4 C and median bias
+was twice as high.  Based on the R2, it also seems likely that the bulk of the
+error is due to fairly consistent overprediction, such that trends are accurate
+in shape but have a consistent bias.
+
+```{r}
+quantile(
+  (data %>% group_by(id) %>% slice_head(n=1))$elevation,
+  0.05 * (1:20),
+  na.rm=T
+)
+```
+
+```{r elev}
+perf <- performance(
+  predict.temperature(
+    make.model(
+      filter(data, elevation < 1800),
+      nthreads=12
+    ),
+    filter(data, elevation >= 1800),
+    compare=T
+  )
+)
+summary(select(perf, -id))
+```
+
+
+
+# Spatial Cross-Validation
+
+To test the importance of spatial coverage in more detail, I divide the gages
+into a 4x4 grid - determined by observation density, not fixed spatial ranges - and
+run a leave-one-out cross-validation on the groups.  This is
+leave-one-out rather than k-fold so it does not use the above utility function.
+
+```{r spat.grp}
+spdat <- data %>%
+  mutate(
+    latrank = ntile(lat, 4),
+    lonrank = ntile(lon, 4),
+    Group = paste0(latrank, "x", lonrank)
+  )
+spdat %>%
+  group_by(id) %>%
+  slice_head(n=1) %>% # first row of each gage only, don't need timeseries
+  ggplot() +
+  geom_polygon(aes(long, lat, group=group), data=states, fill="white",
+                 color="grey", size=2) +
+  aes(x=lon, y=lat, color=Group) +
+  geom_point(size=2) +
+  theme_bw() +
+  labs(
+    x="Longitude",
+    y="Latitude",
+    color="Spatial Group"
+  )
+```
+
+```{r spat.cv}
+cv.perf <- map_dfr(
+  unique(spdat$Group),
+  function(grp) {
+    mod <- make.model(select(filter(spdat,
+                             Group != grp),
+                             -latrank,
+                             -lonrank,
+                             -Group),
+                      nthreads=12)
+    pred <- predict.temperature(mod,
+                                filter(spdat,
+                                       Group == grp),
+                                compare = T)
+    pred %>%
+      group_by(id) %>%
+      summarize(
+        Group = grp,
+        `RMSE (C)` = rmse(Modeled, Actual),
+        `Percent Bias` = pbias(Modeled - 273, Actual - 273),
+        R2 = cor(Modeled, Actual)^2,
+        NSE = NSE(Modeled, Actual)
+      )
+  }
+)
+```
+
+A few gages tend to have quite large outliers for performance metrics, so to make
+the plots intelligible these are filtered out.  The full range is shown by the
+`summary` call.  For the plots, NSE is cut off at -1 and RMSE at 10 C, both
+excluding only a handful of outliers.
+
+The spatial grouping has fairly modest impact on performance.  Some grid squares
+do perform unusually poorly, with median RMSE ranging up to about 3 C, NSE down to
+about 0.4, and bias up to about 20%, but the overall median performance is little
+changed, with median RMSE, NSE, bias, and R2 (including outliers) of 1.9 C, 0.9,
+-0.1%, and 0.92.  A few groups do perform a bit worse, at a median RMSE of around
+2.5-3 C (1x2 and 2x1, which are TX/NM/AZ and Northern California).
+
+
+```{r spat.cv.plot}
+summary(select(cv.perf, -id, -Group))
+cv.perf %>%
+  pivot_longer(-(id:Group),
+               names_to="GOF",
+               values_to="Value") %>%
+  filter(
+    (GOF != "NSE" | Value >= -1),
+    (GOF != "RMSE (C)" | Value <= 10)
+  ) %>%
+  ggplot() +
+  aes(x=Group,
+      y=Value) +
+  geom_boxplot() +
+  facet_wrap(~GOF,
+             ncol=2,
+             strip.position = "left",
+             scales="free") +
+  theme_vert() +
+  labs(
+    x="Group",
+    y=NULL
+  )
+```
+
+# Temporal Cross-Validation
+
+To verify that the prediction capabilities hold up over time, I run a similar
+leave-one-out cross-validation by year.  I also test using 1984-2000 to predict
+2001-22.  NSE and RMSE are again filtered to remove extreme outliers, as is bias.
+This one sticks with leave-one-out instead of k-fold to see if any years show
+up with particularly bad performance or if there are trends over time, etc.
+
+## By Year
+
+Median performance is consistently excellent across years and fairly uniform,
+though slightly worse prior to 1995 and from 2010-15.  Median RMSEs are around
+1 C, so it appears that using all gages as a training set significantly outweighs
+the effect of leaving out just one year and behavior is relatively consistent over
+time.
+
+The number of years is too large for a reasonable boxplot panel in the style above
+and outliers have been displayed extensively in previous chunks, so instead
+the 5th, 25th, 50th, 75th, and 95th percentiles are plotted for each year.  Outliers
+are therefore not filtered as they will not affect the scale.
+
+
+```{r yrcv}
+cv.yr <- map_dfr(
+  unique(data$year),
+  function(yr) {
+    performance(
+      predict.temperature(
+        make.model(filter(data, year != yr), nthreads=12),
+        filter(data, year == yr),
+        compare=T
+      )
+    ) %>%
+      mutate(Year = yr)
+  }
+)
+```
+
+```{r yrcv.display}
+summary(cv.yr)
+quantib <- function(x, quantiles = 0.1*(1:9)) {
+  tibble(
+    Percentile = as.factor(as.integer(quantiles * 100)),
+    Value = quantile(x, quantiles, na.rm=T)
+  )
+}
+cv.yr %>%
+  pivot_longer(-c("id", "Year"),
+               names_to="GOF",
+               values_to="Value") %>%
+  group_by(Year, GOF) %>%
+  group_modify(
+    ~quantib(.x$Value, c(0.05, 0.25, 0.5, 0.75, 0.95))
+  ) %>%
+  ggplot() +
+  aes(x=Year,
+      y=Value,
+      color=Percentile) +
+  geom_point() +
+  facet_wrap(~GOF,
+             ncol=2,
+             strip.position = "left",
+             scales="free") +
+  theme_std() +
+  labs(
+    x="Year",
+    y=NULL,
+    color="Percentile"
+  )
+```
+
+## About 2000
+
+Performance is also unaffected by the before/after 2000 division, so the model does
+appear to be able to successfully handle future conditions even extrapolating
+over two decades forward.  This suggests that behavior is much more variable
+between gages than across time.
+
+```{r multiyear}
+pre <- filter(data, year <= 2000)
+post <- filter(data, year > 2000)
+perf <- rbind(
+  performance(
+    predict.temperature(
+      make.model(pre, nthreads=12),
+      post,
+      compare=T
+    )
+  ) %>% mutate(val="2001-2022"),
+  performance(
+    predict.temperature(
+      make.model(post, nthreads=12),
+      pre,
+      compare=T
+    )
+  ) %>% mutate(val="1984-2000")
+)
+```
+```{r mydisp}
+summary(select(perf, -id, -val))
+perf %>%
+  pivot_longer(-c(id, val),
+               names_to="GOF",
+               values_to="Value") %>%
+  filter(
+    (GOF != "NSE" | Value >= -1),
+    (GOF != "RMSE (C)" | Value <= 10)
+  ) %>%
+  ggplot() +
+  aes(y=Value, color=val) +
+  geom_boxplot() +
+  facet_wrap(~GOF,
+             nrow=1,
+             strip.position = "left",
+             scales="free") +
+  theme_std() +
+  labs(
+    x=NULL,
+    y=NULL,
+    color="Validation Period"
+  )
+```
+
+Interestingly, the about-2000 validation and gagewise cross-validation seem to
+have similar effects, while validating for a single year has much less of a performance
+penalty than validating for a gage.  In a typical use case, one can assume the model
+will be trained on current data, so only gagewise cross-validation is relevant
+and the "Global Validation" data at the top are most important.
+
+Another interesting point is that the early validation period performs much better
+than the late; this suggests that a sizable fraction of the apparent performance
+penalty is simply an effect of (calibration) gage network density.  Validating on
+the earlier period (and thus without added density effects) has better performance
+than cross-validation, so gage behavior is much more uniform in time than in space.
+
+# Testing Gauge Network Density
+
+One reviewer pointed out that, while the approach here is not dependent on anything
+specific to the United States, it is trained on the high-density USGS gage network,
+and this may introduce an untested dependency on training data density.  This
+section evaluates cross-validation performance on smaller random subsets of the
+dataset, approximating a less-dense gage network.  The random selection does not
+take note of the distribution of the network, as gage networks are not, in general,
+uniformly distributed to begin with.  Each density random sample is run 10 times
+to address uncertainty.
+
+The default dataset density, of about 1000 gages across the contiguous United
+States, is a bit more than 1 gage per 10,000 square km.
+
+Gage network density does impact median performance fairly substantially, though
+unsurprisingly the bias remains small.  At 10% density, median cross-validation
+gagewise RMSE is about 2.8 C, decreasing to the usual range (1.8 C) at 100% density.
+The slope does not appear to be zero at that point, so an even denser gage network
+would improve performance, but the rate of improvement is declining.  RMSE appears
+to decrease with network density by something like exponential decay, tending towards
+a limit, by visual inspection, of around 1.5-1.7 C.  If this trend holds and that
+estimate is accurate, that suggests that the training gage network is of nearly
+optimal density.
+
+In large-dataset contexts where an RMSE of up to 3 C could be acceptable,
+TempEst remains usable even at low gage network densities.  The 10% density
+run, with about 100 gages in CONUS, would be roughly 10 gages per 1,000,000 square km.
+
+
+```{r gageden}
+density.run <- function(data,
+                        densities = c(0.1, 0.25, 0.5, 0.75, 1),
+                        runs = 10) {
+  ids <- unique(data$id)
+  data$CV <- data$id
+  names(densities) <- densities
+  map_dfr(densities,
+          function(density) {
+            map_dfr(1:runs,
+                    function(rx) {
+                      kfold(
+                        filter(
+                          data, id %in% sample(ids, as.integer(density * length(ids)))
+                        )
+                      ) %>%
+                        summarize(
+                          across(
+                            -id,
+                            ~median(., na.rm=T)
+                          )
+                        ) %>%
+                        pivot_longer(
+                          everything(),
+                          names_to="GOF",
+                          values_to="Value"
+                        )
+                    })
+          },
+          .id="Density")
+}
+```
+```{r runden}
+dens.ef <- density.run(data)
+```
+```{r plotden}
+ggplot(dens.ef) +
+  aes(x=as.numeric(Density)*100,
+      y=Value) +
+  geom_point() +
+  geom_smooth(method="lm", se=FALSE) +
+  facet_wrap(~GOF,
+             ncol=2,
+             strip.position = "left",
+             scales="free") +
+  theme_std() +
+  labs(
+    x="Density Percentage",
+    y=NULL
+  )
+```
+
+# Full Performance By Month
+
+This section generates a broad summary of performance by several approaches,
+grouped by month to show seasonal trends in performance.  Calibration, gagewise
+cross-validation, and long-term temporal validation performance (both directions)
+are shown.  In order to conserve memory, results are stored as CSVs but not returned,
+then re-read for post-processing.
+
+To save space for data display, only RMSE and bias are displayed in the plot.
+As per usual, error values are filtered for display at RMSE <= 10 C and bias <= 200%.
+
+```{r genfp}
+itm.files <- paste0("Data/",
+                    c("PMC", "PMTF", "PMTB",
+                      paste0("PMCV_", 1:10)),
+                    ".csv")
+
+perf.bymonth(
+  predict.temperature(
+    make.model(data, nthreads=12),
+    data,
+    compare=T
+  )
+) %>% mutate(val="Calibration") %>%
+  write_csv("Data/PMC.csv")
+
+map(1:10,
+    ~(kfold(
+      mutate(data, CV=id), proc=perf.bymonth
+    ) %>% mutate(val="Gagewise Cross-Validation") %>%
+      write_csv(paste0("Data/PMCV_", .x, ".csv"))))
+
+pre <- filter(data, year <= 2000)
+post <- filter(data, year > 2000)
+perf.bymonth(
+  predict.temperature(
+    make.model(pre, nthreads=12),
+    post,
+    compare=T
+  )
+) %>% mutate(val="Validation 2001-2022") %>%
+  write_csv("Data/PMTF.csv")
+perf.bymonth(
+  predict.temperature(
+    make.model(post, nthreads=12),
+    pre,
+    compare=T
+  )
+) %>% mutate(val="Validation 1984-2000") %>%
+  write_csv("Data/PMTB.csv")
+rm(pre, post)
+
+results <- map_dfr(itm.files, read_csv)
+```
+
+```{r}
+summary(select(results, -c(id, time, val)))
+results %>%
+  group_by(time) %>%
+  summarize(
+    across(
+      where(is.numeric),
+      ~median(.x, na.rm=T)
+    )
+  )
+```
+
+
+```{r}
+results %>%
+  select(-c(R2, NSE)) %>%
+  filter(
+    `RMSE (C)` <= 10,
+    `Percent Bias` <= 200,
+    `Percent Bias` >= -200
+  ) %>%
+  pivot_longer(-c(id, time, val),
+               names_to="GOF",
+               values_to="Value") %>%
+  ggplot() +
+  aes(time, Value, color=val) +
+  geom_boxplot() +
+  facet_wrap(~GOF,
+             ncol=1,
+             strip.position = "left",
+             scales="free") +
+  theme_std() +
+  labs(
+    x="Month",
+    y=NULL,
+    color="Validation Approach"
+  )
+```
+
+
+
+
+
