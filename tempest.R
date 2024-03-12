@@ -21,7 +21,7 @@ library(tidyr)
 library(quantregForest)
 library(purrr)
 
-make.model <- function(td, default.inputs=TRUE, ntree=2000, ...) {
+make.model <- function(td, default.inputs=TRUE, ...) {
   # This function trains a temperature model on the provided dataset td.
   # In addition to a number of predictors for which the name is irrelevant
   # so long as it is consistent (see paper for specifics), the input should
@@ -73,7 +73,7 @@ make.model <- function(td, default.inputs=TRUE, ntree=2000, ...) {
     x <- select(dat, -temperature)
     y <- dat$temperature
     mod <- if (nrow(dat) > 10) {
-      quantregForest(x, y, ntree=ntree, ...)
+      quantregForest(x, y, ...)
     } else NULL
     regl[[month]] <- mod
   }
@@ -262,7 +262,7 @@ case.study <- function() {
   is.survivable <- function(year.temps) {
     # Boolean: assuming the data provided are for one full year,
     # is the river survivable for that year?
-    max(year.temps, na.rm = TRUE) < 293  # Kelvin
+    max(year.temps, na.rm = TRUE) < 20
   }
   is.optimal <- function(months, year.temps) {
     # Boolean: is the July temperature in the optimal range?
@@ -270,7 +270,7 @@ case.study <- function() {
     if (length(july) == 0)
       FALSE
     else {
-      july[1] >= 281
+      july[1] >= 8
     }
   }
   egg <- function(months, year.temps) {
@@ -278,7 +278,7 @@ case.study <- function() {
     if (length(jan) == 0)
       FALSE
     else {
-      jan[1] >= 275  # Kelvin
+      jan[1] >= 2
     }
   }
   
