@@ -1,8 +1,14 @@
 # Tempest
 
-Tempest is a river TEMPerature ESTimation model implemented in R; it supports high-accuracy estimation of river temperatures using only satellite-based remote sensing data.  It has been validated for publicly-available datasets covering the contiguous United States, but should be generalizable to other regions and datasets.  Detailed performance information is available in Philippus, D., Sytsma, A., Rust, A., and Hogue, T.S. (in review); briefly, median validation Root Mean Square Error is about 1.75 C for individual predictions, and errors are normally distributed within roughly plus or minus 4.5 C with bias of approximately 0.  Therefore, the model is suitable for statistical analyses of hundreds or thousands of points, but should be used with caution for individual points or reaches without validation data.  The model inputs range in resolution from 10 to 500 meters; in practice, points closer together than a few hundred meters will likely not provide usefully different outputs, as the data collection radius is 1000 m.
+Tempest is a river TEMPerature ESTimation model implemented in R; it supports high-accuracy estimation of river temperatures using only satellite-based remote sensing data.  It has been validated for publicly-available datasets covering the contiguous United States, but should be generalizable to other regions and datasets.  Detailed performance information is available in Philippus et al. 2024 (see [Citation](#Citation)); briefly, median validation Root Mean Square Error is about 1.75 C for individual predictions, and errors are normally distributed within roughly plus or minus 4.5 C with bias of approximately 0.  Therefore, the model is suitable for statistical analyses of hundreds or thousands of points, but should be used with caution for individual points or reaches without validation data.  The model inputs range in resolution from 10 to 500 meters; in practice, points closer together than a few hundred meters will likely not provide usefully different outputs, as the data collection radius is 1000 m.
 
-Note that the model is provided with ABSOLUTELY NO WARRANTY regarding its accuracy or anything else.  The above performance information is typical behavior, not a guarantee.
+TempEst is not currently being actively developed, but further development is possible upon request.  In particular, open an Issue if your use case would benefit from:
+
+- In R, having the `predict` method implemented for the model in addition to the custom prediction function
+- Having either the Google Earth Engine retrieval code or TempEst itself ported to Python
+- Non-GEE functions for data retrieval (e.g. direct raster retrieval from data provider APIs and local processing) - note that this would likely be much slower than GEE
+
+Note that the model is provided with absolutely no warranty regarding its accuracy or anything else.  The above performance information is typical behavior, not a guarantee.
 
 # Quick Start
 
@@ -51,4 +57,8 @@ In our experience, the Earth Engine retrieval script takes roughly 20 minutes to
 
 # License
 
-This model is provided under the terms of the GNU General Public License v3.0.  It comes with absolutely no warranty, and you are free to use, modify, and redistribute it as long as any derivatives are provided under the same terms and credit is given.  By using this model or any data derived from it for research, you agree to cite the above-mentioned paper (Philippus et al., in preparation).
+This model is provided under the terms of the GNU General Public License v3.0.  It comes with absolutely no warranty, and you are free to use, modify, and redistribute it as long as any derivatives are provided under the same terms and credit is given.  By using this model or any data derived from it for research, you agree to cite Philippus et al. 2024.
+
+# Citation
+
+The full model design and performance are documented in: Philippus, Sytsma, Rust, and Hogue, (2024), "A Machine Learning Model for Estimating the Temperature of Small Rivers Using Satellite-Based Spatial Data", in *Remote Sensing of Environment* (DOI forthcoming shortly).
